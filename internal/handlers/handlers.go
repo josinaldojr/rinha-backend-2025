@@ -7,11 +7,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/shopspring/decimal"
-
 	"github.com/josinaldojr/rinha-backend-2025/internal/decider"
 	"github.com/josinaldojr/rinha-backend-2025/internal/processors"
 	"github.com/josinaldojr/rinha-backend-2025/internal/repo"
+	"github.com/shopspring/decimal"
 )
 
 type Handler struct {
@@ -54,9 +53,11 @@ func (h *Handler) CreatePayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	sentAt := time.Now().UTC()
 	provider := h.dec.Choose()
+
 	started := time.Now()
-	err = h.proc.Pay(ctx, processors.Provider(provider), in.CorrelationID, in.Amount)
+	err = h.proc.Pay(ctx, processors.Provider(provider), in.CorrelationID, in.Amount, sentAt)
 	h.dec.Observe(decider.Provider(provider), time.Since(started), err)
 
 	status := repo.StatusFailed
@@ -64,7 +65,7 @@ func (h *Handler) CreatePayment(w http.ResponseWriter, r *http.Request) {
 		status = repo.StatusProcessed
 	}
 
-	_ = h.db.Finish(ctx, in.CorrelationID, repo.Provider(provider), status)
+	_ = h.db.Finish(ctx, in.CorrelationID, repo.Provider(provider), status, sentAt)
 
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(map[string]any{

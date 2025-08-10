@@ -11,24 +11,24 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// Tipos usados pelo handlers/decider
 type Provider string
+
 const (
 	ProviderDefault  Provider = "default"
 	ProviderFallback Provider = "fallback"
 )
 
 type Status string
+
 const (
 	StatusProcessed Status = "PROCESSED"
 	StatusFailed    Status = "FAILED"
 )
 
-// Contrato usado nos handlers
 type DB interface {
 	Close(ctx context.Context)
 	EnsureUnique(ctx context.Context, correlationID uuid.UUID, amount decimal.Decimal) (already bool, err error)
-	Finish(ctx context.Context, correlationID uuid.UUID, provider Provider, status Status) error
+	Finish(ctx context.Context, correlationID uuid.UUID, provider Provider, status Status, requestedAt time.Time) error
 	Summary(ctx context.Context, provider Provider, from, to *time.Time) (count int64, total decimal.Decimal, err error)
 	TryGlobalLock(ctx context.Context, key int64) (bool, error)
 	UnlockGlobal(ctx context.Context, key int64) error
@@ -36,10 +36,11 @@ type DB interface {
 
 type PgxDB struct{ pool *pgxpool.Pool }
 
-// Open cria o pool (usado no main.go)
 func Open(ctx context.Context, url string) (*PgxDB, error) {
 	pool, err := pgxpool.New(ctx, url)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	return &PgxDB{pool: pool}, nil
 }
 
@@ -67,11 +68,13 @@ func (p *PgxDB) EnsureUnique(ctx context.Context, correlationID uuid.UUID, amoun
 	return false, nil
 }
 
-// Finish atualiza provider/status após a tentativa de envio ao processor.
-func (p *PgxDB) Finish(ctx context.Context, correlationID uuid.UUID, provider Provider, status Status) error {
+// Finish atualiza provider/status e SOBREESCREVE requested_at com o mesmo timestamp enviado ao processor.
+func (p *PgxDB) Finish(ctx context.Context, correlationID uuid.UUID, provider Provider, status Status, requestedAt time.Time) error {
 	_, err := p.pool.Exec(ctx, `
-		UPDATE payments SET provider=$1, status=$2 WHERE correlation_id=$3
-	`, provider, status, correlationID)
+		UPDATE payments
+		   SET provider=$1, status=$2, requested_at=$4
+		 WHERE correlation_id=$3
+	`, provider, status, correlationID, requestedAt)
 	return err
 }
 
@@ -117,8 +120,12 @@ func (p *PgxDB) UnlockGlobal(ctx context.Context, key int64) error {
 
 // ParseISO: helper para parsear timestamps ISO UTC do /payments-summary?from&to
 func ParseISO(s string) *time.Time {
-	if s == "" { return nil }
+	if s == "" {
+		return nil
+	}
 	t, err := time.Parse(time.RFC3339Nano, s)
-	if err != nil { return nil }
+	if err != nil {
+		return nil
+	}
 	return &t
 }
