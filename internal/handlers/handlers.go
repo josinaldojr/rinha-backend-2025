@@ -55,7 +55,6 @@ func (h *Handler) CreatePayment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	provider := h.dec.Choose()
-
 	started := time.Now()
 	err = h.proc.Pay(ctx, processors.Provider(provider), in.CorrelationID, in.Amount)
 	h.dec.Observe(decider.Provider(provider), time.Since(started), err)

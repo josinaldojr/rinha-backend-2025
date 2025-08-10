@@ -50,3 +50,30 @@ func (c *Client) Pay(ctx context.Context, provider Provider, id uuid.UUID, amoun
 	if resp.StatusCode/100 != 2 { return fmt.Errorf("processor status: %d", resp.StatusCode) }
 	return nil
 }
+
+type HealthInfo struct {
+    Failing       bool `json:"failing"`
+    MinResponseMs int  `json:"minResponseTime"`
+}
+
+func (c *Client) Health(ctx context.Context, provider Provider) (HealthInfo, error) {
+    url := c.defaultURL
+    if provider == ProviderFallback { url = c.fallbackURL }
+
+    req, _ := http.NewRequestWithContext(ctx, http.MethodGet,
+        fmt.Sprintf("%s/payments/service-health", url), nil)
+
+    resp, err := c.http.Do(req)
+    if err != nil { return HealthInfo{}, err }
+    defer resp.Body.Close()
+
+    if resp.StatusCode/100 != 2 {
+        return HealthInfo{}, fmt.Errorf("health status: %d", resp.StatusCode)
+    }
+
+    var out HealthInfo
+    if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+        return HealthInfo{}, err
+    }
+    return out, nil
+}

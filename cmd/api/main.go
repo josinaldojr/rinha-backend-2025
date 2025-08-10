@@ -11,7 +11,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-
 	"github.com/josinaldojr/rinha2025-api/internal/config"
 	"github.com/josinaldojr/rinha2025-api/internal/decider"
 	"github.com/josinaldojr/rinha2025-api/internal/handlers"
@@ -32,6 +31,11 @@ func main() {
 	proc := processors.NewClient(cfg.PPDefaultURL, cfg.PPFallbackURL)
 	d := decider.New()
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	decider.StartHealthWorker(ctx, db, proc, d)
+
 	h := handlers.New(db, proc, d)
 
 	r := chi.NewRouter()
@@ -41,6 +45,7 @@ func main() {
 
 	r.Post("/payments", h.CreatePayment)
 	r.Get("/payments-summary", h.Summary)
+
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	r.Get("/ready", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 
@@ -53,12 +58,12 @@ func main() {
 		}
 	}()
 
-	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_ = srv.Shutdown(ctx)
+	cancel()
+	ctx2, c2 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer c2()
+	_ = srv.Shutdown(ctx2)
 }
