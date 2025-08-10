@@ -1,4 +1,4 @@
-module github.com/josinaldojr/rinha2025-api
+module github.com/josinaldojr/rinha-backend-2025
 
 go 1.23.0
 

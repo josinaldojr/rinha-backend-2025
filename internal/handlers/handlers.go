@@ -9,9 +9,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
-	"github.com/josinaldojr/rinha2025-api/internal/decider"
-	"github.com/josinaldojr/rinha2025-api/internal/processors"
-	"github.com/josinaldojr/rinha2025-api/internal/repo"
+	"github.com/josinaldojr/rinha-backend-2025/internal/decider"
+	"github.com/josinaldojr/rinha-backend-2025/internal/processors"
+	"github.com/josinaldojr/rinha-backend-2025/internal/repo"
 )
 
 type Handler struct {

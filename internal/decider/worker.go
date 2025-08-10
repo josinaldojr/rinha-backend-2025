@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/josinaldojr/rinha2025-api/internal/processors"
-	"github.com/josinaldojr/rinha2025-api/internal/repo"
+	"github.com/josinaldojr/rinha-backend-2025/internal/processors"
+	"github.com/josinaldojr/rinha-backend-2025/internal/repo"
 )
 
 const lockKey int64 = 987654321

@@ -11,12 +11,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/josinaldojr/rinha2025-api/internal/config"
-	"github.com/josinaldojr/rinha2025-api/internal/decider"
-	"github.com/josinaldojr/rinha2025-api/internal/handlers"
-	"github.com/josinaldojr/rinha2025-api/internal/processors"
-	"github.com/josinaldojr/rinha2025-api/internal/repo"
-	"github.com/josinaldojr/rinha2025-api/internal/server"
+	"github.com/josinaldojr/rinha-backend-2025/internal/config"
+	"github.com/josinaldojr/rinha-backend-2025/internal/decider"
+	"github.com/josinaldojr/rinha-backend-2025/internal/handlers"
+	"github.com/josinaldojr/rinha-backend-2025/internal/processors"
+	"github.com/josinaldojr/rinha-backend-2025/internal/repo"
+	"github.com/josinaldojr/rinha-backend-2025/internal/server"
 )
 
 func main() {
