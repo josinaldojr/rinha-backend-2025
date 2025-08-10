@@ -1,0 +1,24 @@
+{
+  "name": "Josinaldo J\u00fanior",
+  "social": [
+    ""
+  ],
+  "source-code-repo": "https://github.com/josinaldojr/rinha-backend-2025",
+  "langs": [
+    "go"
+  ],
+  "storages": [
+    "postgresql"
+  ],
+  "messaging": [],
+  "load-balancers": [
+    "nginx"
+  ],
+  "other-technologies": [
+    "pgx",
+    "chi",
+    "idempotency",
+    "circuit-breaker",
+    "epsilon-greedy"
+  ]
+}

@@ -1,0 +1,63 @@
+version: "3.9"
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "9999:9999"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.05"
+          memory: "12MB"
+    networks: [payment-processor, appnet]
+
+  api-1:
+    build: .
+    image: ghcr.io/youruser/rinha2025-api:latest
+    environment:
+      - DATABASE_URL=postgres://rinha:rinha@postgres:5432/rinha?sslmode=disable
+      - PP_DEFAULT_URL=http://payment-processor-default:8080
+      - PP_FALLBACK_URL=http://payment-processor-fallback:8080
+      - INSTANCE_ID=1
+    deploy:
+      resources:
+        limits:
+          cpus: "0.40"
+          memory: "80MB"
+    networks: [payment-processor, appnet]
+
+  api-2:
+    image: ghcr.io/youruser/rinha2025-api:latest
+    environment:
+      - DATABASE_URL=postgres://rinha:rinha@postgres:5432/rinha?sslmode=disable
+      - PP_DEFAULT_URL=http://payment-processor-default:8080
+      - PP_FALLBACK_URL=http://payment-processor-fallback:8080
+      - INSTANCE_ID=2
+    deploy:
+      resources:
+        limits:
+          cpus: "0.40"
+          memory: "80MB"
+    networks: [payment-processor, appnet]
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_PASSWORD=rinha
+      - POSTGRES_USER=rinha
+      - POSTGRES_DB=rinha
+    volumes:
+      - ./sql:/docker-entrypoint-initdb.d:ro
+    deploy:
+      resources:
+        limits:
+          cpus: "0.60"
+          memory: "178MB"
+    networks: [appnet]
+  
+networks:
+  appnet: {{}}
+  payment-processor:
+    external: true
