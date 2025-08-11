@@ -29,9 +29,12 @@ func NewClient(defURL, fbURL string) *Client {
 	return &Client{
 		defaultURL:  defURL,
 		fallbackURL: fbURL,
-		http: &http.Client{Timeout: 280 * time.Millisecond},
+		http:        &http.Client{Timeout: 550 * time.Millisecond},
 	}
 }
+
+func (c *Client) DefaultBase() string  { return c.defaultURL }
+func (c *Client) FallbackBase() string { return c.fallbackURL }
 
 type payReq struct {
 	CorrelationID uuid.UUID       `json:"correlationId"`

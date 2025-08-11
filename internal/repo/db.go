@@ -11,6 +11,7 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+// Tipos usados pelos handlers/decider
 type Provider string
 
 const (
@@ -21,38 +22,68 @@ const (
 type Status string
 
 const (
-	StatusProcessed Status = "PROCESSED"
-	StatusFailed    Status = "FAILED"
+	StatusPending     Status = "PENDING"
+	StatusDispatching Status = "DISPATCHING"
+	StatusProcessed   Status = "PROCESSED"
+	StatusFailed      Status = "FAILED"
 )
 
+// Item de batch para o dispatcher
+type BatchItem struct {
+	ID            uuid.UUID
+	CorrelationID uuid.UUID
+	Amount        decimal.Decimal
+}
+
+// Contrato usado nos handlers e workers
 type DB interface {
 	Close(ctx context.Context)
+
+	// Hot path (handler)
 	EnsureUnique(ctx context.Context, correlationID uuid.UUID, amount decimal.Decimal) (already bool, err error)
+
+	// Finalização após chamada ao processor
 	Finish(ctx context.Context, correlationID uuid.UUID, provider Provider, status Status, requestedAt time.Time) error
+
+	// Summary
 	Summary(ctx context.Context, provider Provider, from, to *time.Time) (count int64, total decimal.Decimal, err error)
+
+	// Health worker (advisory lock)
 	TryGlobalLock(ctx context.Context, key int64) (bool, error)
 	UnlockGlobal(ctx context.Context, key int64) error
+
+	// Dispatcher: pega lote PENDING -> marca como DISPATCHING e retorna os itens
+	ClaimPendingBatch(ctx context.Context, limit int) ([]BatchItem, error)
+
+	// Reconciliação
+	ListInFlightWithTime(ctx context.Context, limit int) ([]uuid.UUID, []Provider, []time.Time, error)
+	MarkProcessed(ctx context.Context, id uuid.UUID) error
+	MarkFailed(ctx context.Context, id uuid.UUID) error
 }
 
 type PgxDB struct{ pool *pgxpool.Pool }
 
+// Open cria o pool (usado no main.go)
 func Open(ctx context.Context, url string) (*PgxDB, error) {
-	pool, err := pgxpool.New(ctx, url)
-	if err != nil {
-		return nil, err
-	}
-	return &PgxDB{pool: pool}, nil
+    cfg, err := pgxpool.ParseConfig(url)
+    if err != nil { return nil, err }
+    cfg.MaxConns = 20
+    cfg.MinConns = 2
+		
+    cfg.ConnConfig.RuntimeParams["application_name"] = "rinha-api"
+    pool, err := pgxpool.NewWithConfig(ctx, cfg)
+    if err != nil { return nil, err }
+    return &PgxDB{pool: pool}, nil
 }
 
 func (p *PgxDB) Close(ctx context.Context) { p.pool.Close() }
 
-// EnsureUnique faz um insert "placeholder" (FAILED) e detecta duplicidade por correlation_id.
-// Retorna already=true se já existia antes (idempotência).
+// EnsureUnique: insere placeholder (PENDING) e detecta duplicidade por correlation_id.
 func (p *PgxDB) EnsureUnique(ctx context.Context, correlationID uuid.UUID, amount decimal.Decimal) (bool, error) {
 	var dummy int
 	err := p.pool.QueryRow(ctx, `
 		INSERT INTO payments (correlation_id, amount, provider, status, requested_at)
-		VALUES ($1, $2, 'default', 'FAILED', now())
+		VALUES ($1, $2, 'default', 'PENDING', now())
 		ON CONFLICT (correlation_id) DO NOTHING
 		RETURNING 1
 	`, correlationID, amount).Scan(&dummy)
@@ -68,7 +99,7 @@ func (p *PgxDB) EnsureUnique(ctx context.Context, correlationID uuid.UUID, amoun
 	return false, nil
 }
 
-// Finish atualiza provider/status e SOBREESCREVE requested_at com o mesmo timestamp enviado ao processor.
+// Finish: atualiza provider/status e requested_at com o timestamp usado no processor.
 func (p *PgxDB) Finish(ctx context.Context, correlationID uuid.UUID, provider Provider, status Status, requestedAt time.Time) error {
 	_, err := p.pool.Exec(ctx, `
 		UPDATE payments
@@ -83,7 +114,6 @@ func (p *PgxDB) Summary(ctx context.Context, provider Provider, from, to *time.T
 	q := `SELECT count(*), COALESCE(sum(amount), 0) FROM payments WHERE provider=$1 AND status='PROCESSED'`
 	args := []any{provider}
 
-	// Filtros de período (em requested_at)
 	if from != nil {
 		q += " AND requested_at >= $2"
 		args = append(args, *from)
@@ -106,7 +136,7 @@ func (p *PgxDB) Summary(ctx context.Context, provider Provider, from, to *time.T
 	return count, total, nil
 }
 
-// TryGlobalLock/UnlockGlobal: advisory lock para coordenar o health-check (1 nó por cluster).
+// Advisory lock para o health worker
 func (p *PgxDB) TryGlobalLock(ctx context.Context, key int64) (bool, error) {
 	var ok bool
 	err := p.pool.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, key).Scan(&ok)
@@ -116,6 +146,86 @@ func (p *PgxDB) TryGlobalLock(ctx context.Context, key int64) (bool, error) {
 func (p *PgxDB) UnlockGlobal(ctx context.Context, key int64) error {
 	var ok bool
 	return p.pool.QueryRow(ctx, `SELECT pg_advisory_unlock($1)`, key).Scan(&ok)
+}
+
+// ClaimPendingBatch: bloqueia e marca PENDING -> DISPATCHING em um único statement.
+// Retorna o lote para processamento fora da transação (sem segurar lock).
+func (p *PgxDB) ClaimPendingBatch(ctx context.Context, limit int) ([]BatchItem, error) {
+	rows, err := p.pool.Query(ctx, `
+		WITH cte AS (
+		  SELECT id
+		       , correlation_id
+		       , amount
+		    FROM payments
+		   WHERE status = 'PENDING'
+		   ORDER BY requested_at
+		   FOR UPDATE SKIP LOCKED
+		   LIMIT $1
+		),
+		upd AS (
+		  UPDATE payments p
+		     SET status = 'DISPATCHING'
+		    FROM cte
+		   WHERE p.id = cte.id
+		)
+		SELECT cte.id, cte.correlation_id, cte.amount
+		  FROM cte
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []BatchItem
+	for rows.Next() {
+		var id, cid uuid.UUID
+		var amtStr string
+		if err := rows.Scan(&id, &cid, &amtStr); err != nil {
+			return nil, err
+		}
+		amt, _ := decimal.NewFromString(amtStr)
+		out = append(out, BatchItem{ID: id, CorrelationID: cid, Amount: amt})
+	}
+	return out, rows.Err()
+}
+
+// Reconciliação: busca itens em voo (PENDING e DISPATCHING) do mais antigo.
+func (p *PgxDB) ListInFlightWithTime(ctx context.Context, limit int) ([]uuid.UUID, []Provider, []time.Time, error) {
+	rows, err := p.pool.Query(ctx, `
+		SELECT correlation_id, provider, requested_at
+		  FROM payments
+		 WHERE status IN ('PENDING','DISPATCHING')
+		 ORDER BY requested_at ASC
+		 LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	defer rows.Close()
+
+	var ids []uuid.UUID
+	var provs []Provider
+	var times []time.Time
+	for rows.Next() {
+		var id uuid.UUID
+		var pv Provider
+		var ts time.Time
+		if err := rows.Scan(&id, &pv, &ts); err != nil {
+			return nil, nil, nil, err
+		}
+		ids, provs, times = append(ids, id), append(provs, pv), append(times, ts)
+	}
+	return ids, provs, times, rows.Err()
+}
+
+func (p *PgxDB) MarkProcessed(ctx context.Context, id uuid.UUID) error {
+	_, err := p.pool.Exec(ctx, `UPDATE payments SET status='PROCESSED' WHERE correlation_id=$1`, id)
+	return err
+}
+
+func (p *PgxDB) MarkFailed(ctx context.Context, id uuid.UUID) error {
+	_, err := p.pool.Exec(ctx, `UPDATE payments SET status='FAILED' WHERE correlation_id=$1`, id)
+	return err
 }
 
 // ParseISO: helper para parsear timestamps ISO UTC do /payments-summary?from&to

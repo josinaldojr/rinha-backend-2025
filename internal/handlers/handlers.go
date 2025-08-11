@@ -7,20 +7,16 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/josinaldojr/rinha-backend-2025/internal/decider"
-	"github.com/josinaldojr/rinha-backend-2025/internal/processors"
 	"github.com/josinaldojr/rinha-backend-2025/internal/repo"
 	"github.com/shopspring/decimal"
 )
 
 type Handler struct {
-	db   repo.DB
-	proc *processors.Client
-	dec  *decider.Decider
+	db repo.DB
 }
 
-func New(db repo.DB, proc *processors.Client, d *decider.Decider) *Handler {
-	return &Handler{db: db, proc: proc, dec: d}
+func New(db repo.DB) *Handler {
+	return &Handler{db: db}
 }
 
 type paymentIn struct {
@@ -39,47 +35,40 @@ func (h *Handler) CreatePayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 300*time.Millisecond)
+	// caminho super curto: só enfileira e responde
+	ctx, cancel := context.WithTimeout(r.Context(), 450*time.Millisecond) // 250 -> 450
 	defer cancel()
 
 	already, err := h.db.EnsureUnique(ctx, in.CorrelationID, in.Amount)
 	if err != nil {
-		w.WriteHeader(500)
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 	if already {
-		w.WriteHeader(200)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]any{"status": "OK", "idempotent": true})
 		return
 	}
 
-	sentAt := time.Now().UTC()
-	provider := h.dec.Choose()
-
-	started := time.Now()
-	err = h.proc.Pay(ctx, processors.Provider(provider), in.CorrelationID, in.Amount, sentAt)
-	h.dec.Observe(decider.Provider(provider), time.Since(started), err)
-
-	status := repo.StatusFailed
-	if err == nil {
-		status = repo.StatusProcessed
-	}
-
-	_ = h.db.Finish(ctx, in.CorrelationID, repo.Provider(provider), status, sentAt)
-
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"provider": provider, "status": string(status),
+		"status":   "QUEUED",
+		"queuedAt": time.Now().UTC(),
 	})
 }
 
 func (h *Handler) Summary(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+  defer cancel()
+
 	fromStr := r.URL.Query().Get("from")
 	toStr := r.URL.Query().Get("to")
 	from, to := repo.ParseISO(fromStr), repo.ParseISO(toStr)
 
-	defCnt, defAmt, _ := h.db.Summary(r.Context(), repo.ProviderDefault, from, to)
-	fbCnt, fbAmt, _ := h.db.Summary(r.Context(), repo.ProviderFallback, from, to)
+	defCnt, defAmt, _ := h.db.Summary(ctx, repo.ProviderDefault, from, to)
+	fbCnt, fbAmt, _ := h.db.Summary(ctx, repo.ProviderFallback, from, to)
 
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"default":  map[string]any{"totalRequests": defCnt, "totalAmount": defAmt},

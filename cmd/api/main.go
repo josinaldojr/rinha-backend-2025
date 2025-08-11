@@ -13,8 +13,10 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/josinaldojr/rinha-backend-2025/internal/config"
 	"github.com/josinaldojr/rinha-backend-2025/internal/decider"
+	"github.com/josinaldojr/rinha-backend-2025/internal/dispatcher"
 	"github.com/josinaldojr/rinha-backend-2025/internal/handlers"
 	"github.com/josinaldojr/rinha-backend-2025/internal/processors"
+	"github.com/josinaldojr/rinha-backend-2025/internal/reconciler"
 	"github.com/josinaldojr/rinha-backend-2025/internal/repo"
 	"github.com/josinaldojr/rinha-backend-2025/internal/server"
 )
@@ -34,10 +36,13 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Workers
 	decider.StartHealthWorker(ctx, db, proc, d)
+	dispatcher.Start(ctx, db, proc, d)
+	reconciler.Start(ctx, db, proc)
 
-	h := handlers.New(db, proc, d)
-
+	// Handlers/Router
+	h := handlers.New(db)
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP)
 	r.Use(middleware.RequestID)
@@ -45,7 +50,6 @@ func main() {
 
 	r.Post("/payments", h.CreatePayment)
 	r.Get("/payments-summary", h.Summary)
-
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	r.Get("/ready", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 

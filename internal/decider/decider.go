@@ -39,10 +39,10 @@ func New() *Decider {
 			ProviderDefault:  {latEWMA: 50 * time.Millisecond},
 			ProviderFallback: {latEWMA: 60 * time.Millisecond},
 		},
-		marginMs:     120,            // default pode ser até 120ms mais lento
-		epsilon:      0.01,           // 1% de exploração
-		cbFailRate:   0.25,           // abre CB com >=25% de erro
-		cbMinSamples: 40,             // em pelo menos 40 amostras
+		marginMs:     150,
+		epsilon:      0.01,
+		cbFailRate:   0.25,
+		cbMinSamples: 40,
 		cbTimeout:    2 * time.Second,
 	}
 }
@@ -51,7 +51,6 @@ func (d *Decider) Choose() string {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
-	// ε-greedy
 	if rand.Float64() < d.epsilon {
 		if rand.IntN(2) == 0 {
 			return string(ProviderDefault)

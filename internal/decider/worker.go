@@ -2,6 +2,7 @@ package decider
 
 import (
 	"context"
+	"log"
 	"time"
 
 	"github.com/josinaldojr/rinha-backend-2025/internal/processors"
@@ -20,15 +21,17 @@ func StartHealthWorker(ctx context.Context, db repo.DB, proc *processors.Client,
 				return
 			case <-t.C:
 				ok, err := db.TryGlobalLock(ctx, lockKey)
-				if err != nil || !ok {
+				if err != nil {
+					log.Printf("health lock err: %v", err)
 					continue
 				}
-
+				if !ok {
+					continue
+				}
 				func() {
 					defer db.UnlockGlobal(ctx, lockKey)
 					ctx2, cancel := context.WithTimeout(ctx, 800*time.Millisecond)
 					defer cancel()
-
 					if hi, err := proc.Health(ctx2, processors.ProviderDefault); err == nil {
 						d.UpdateHealth(ProviderDefault, hi.Failing, hi.MinResponseMs)
 					}
