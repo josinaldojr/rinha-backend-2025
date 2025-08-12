@@ -12,10 +12,10 @@ import (
 )
 
 const (
-    maxProbeBatch    = 512           // 256 -> 512
-    failAfter        = 5 * time.Second // 8s -> 5s (falha mais cedo se realmente não existe)
-    probeHTTPTimeout = 400 * time.Millisecond // 200ms -> 400ms (menos falso negativo)
-    loopEvery        = 50 * time.Millisecond   // 100ms -> 50ms
+	maxProbeBatch    = 512                    // cobre mais itens por ciclo
+	failAfter        = 5 * time.Second        // falha mais cedo se realmente não apareceu
+	probeHTTPTimeout = 400 * time.Millisecond // menos falso negativo em carga
+	loopEvery        = 50 * time.Millisecond  // mais responsivo
 )
 
 func Start(ctx context.Context, db repo.DB, proc *processors.Client) {

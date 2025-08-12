@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	dispatchLoopEvery = 20 * time.Millisecond // 10ms -> 20ms
-	dispatchBatchSize = 64                    // 128 -> 64
+	dispatchLoopEvery = 20 * time.Millisecond // menos pressão no DB
+	dispatchBatchSize = 64                    // lotes menores = menos picos de UPDATE
 )
 
 func Start(ctx context.Context, db repo.DB, proc *processors.Client, d *decider.Decider) {
@@ -42,8 +42,14 @@ func Start(ctx context.Context, db repo.DB, proc *processors.Client, d *decider.
 					status := repo.StatusPending
 					if err == nil {
 						status = repo.StatusProcessed
+						// finaliza com provider escolhido e mesmo sentAt
+						_ = db.Finish(ctx, it.CorrelationID, repo.Provider(prov), status, sentAt)
+						continue
 					}
-					// finaliza com provider escolhido e mesmo sentAt
+
+					if quickConfirm(ctx, proc, prov, it.CorrelationID) {
+						status = repo.StatusProcessed
+					}
 					_ = db.Finish(ctx, it.CorrelationID, repo.Provider(prov), status, sentAt)
 				}
 			}
@@ -51,8 +57,10 @@ func Start(ctx context.Context, db repo.DB, proc *processors.Client, d *decider.
 	}()
 }
 
+// quickConfirm faz uma verificação única no provider logo após um erro/timeout do Pay.
+// Se o provider já tiver persistido a transação, retornamos true e marcamos PROCESSED.
 func quickConfirm(ctx context.Context, proc *processors.Client, prov processors.Provider, id uuid.UUID) bool {
-	httpc := &http.Client{Timeout: 400 * time.Millisecond} // um pouco mais folgado
+	httpc := &http.Client{Timeout: 400 * time.Millisecond} // folga moderada para evitar falso negativo
 	base := proc.DefaultBase()
 	if prov == processors.ProviderFallback {
 		base = proc.FallbackBase()
