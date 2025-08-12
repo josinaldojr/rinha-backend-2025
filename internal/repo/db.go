@@ -65,15 +65,24 @@ type PgxDB struct{ pool *pgxpool.Pool }
 
 // Open cria o pool (usado no main.go)
 func Open(ctx context.Context, url string) (*PgxDB, error) {
-    cfg, err := pgxpool.ParseConfig(url)
-    if err != nil { return nil, err }
-    cfg.MaxConns = 20
-    cfg.MinConns = 2
-		
-    cfg.ConnConfig.RuntimeParams["application_name"] = "rinha-api"
-    pool, err := pgxpool.NewWithConfig(ctx, cfg)
-    if err != nil { return nil, err }
-    return &PgxDB{pool: pool}, nil
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		return nil, err
+	}
+	cfg.MaxConns = 20
+	cfg.MinConns = 2
+	// Menos fsync por transação; bom para latência em ambiente de teste
+	if cfg.ConnConfig.RuntimeParams == nil {
+		cfg.ConnConfig.RuntimeParams = map[string]string{}
+	}
+	cfg.ConnConfig.RuntimeParams["application_name"] = "rinha-api"
+	cfg.ConnConfig.RuntimeParams["synchronous_commit"] = "off"
+
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &PgxDB{pool: pool}, nil
 }
 
 func (p *PgxDB) Close(ctx context.Context) { p.pool.Close() }

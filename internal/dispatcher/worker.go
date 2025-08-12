@@ -13,8 +13,11 @@ import (
 )
 
 const (
-	dispatchLoopEvery = 20 * time.Millisecond // menos pressão no DB
+	dispatchLoopEvery = 20 * time.Millisecond // controla a pressão no DB
 	dispatchBatchSize = 64                    // lotes menores = menos picos de UPDATE
+
+	delayedConfirmAfter = 150 * time.Millisecond // segunda confirmação logo depois do timeout
+	confirmHTTPTimeout  = 400 * time.Millisecond // timeout do GET /payments/{id}
 )
 
 func Start(ctx context.Context, db repo.DB, proc *processors.Client, d *decider.Decider) {
@@ -39,28 +42,45 @@ func Start(ctx context.Context, db repo.DB, proc *processors.Client, d *decider.
 					err := proc.Pay(ctx, prov, it.CorrelationID, it.Amount, sentAt)
 					d.Observe(decider.Provider(prov), time.Since(start), err)
 
-					status := repo.StatusPending
 					if err == nil {
-						status = repo.StatusProcessed
-						// finaliza com provider escolhido e mesmo sentAt
-						_ = db.Finish(ctx, it.CorrelationID, repo.Provider(prov), status, sentAt)
+						// caminho feliz: fecha imediato
+						_ = db.Finish(ctx, it.CorrelationID, repo.Provider(prov), repo.StatusProcessed, sentAt)
 						continue
 					}
 
+					// 1) confirmação imediata
 					if quickConfirm(ctx, proc, prov, it.CorrelationID) {
-						status = repo.StatusProcessed
+						_ = db.Finish(ctx, it.CorrelationID, repo.Provider(prov), repo.StatusProcessed, sentAt)
+						continue
 					}
-					_ = db.Finish(ctx, it.CorrelationID, repo.Provider(prov), status, sentAt)
+
+					// 2) confirmação "um instante depois"
+					delayedCtx, cancel := context.WithTimeout(ctx, confirmHTTPTimeout+50*time.Millisecond)
+					timer := time.NewTimer(delayedConfirmAfter)
+					select {
+					case <-delayedCtx.Done():
+						timer.Stop()
+					case <-timer.C:
+						if quickConfirm(delayedCtx, proc, prov, it.CorrelationID) {
+							cancel()
+							_ = db.Finish(ctx, it.CorrelationID, repo.Provider(prov), repo.StatusProcessed, sentAt)
+							continue
+						}
+						cancel()
+					}
+
+					// ainda não achou? mantém PENDING para o reconciler decidir
+					_ = db.Finish(ctx, it.CorrelationID, repo.Provider(prov), repo.StatusPending, sentAt)
 				}
 			}
 		}
 	}()
 }
 
-// quickConfirm faz uma verificação única no provider logo após um erro/timeout do Pay.
+// quickConfirm faz uma verificação única no provider logo após erro/timeout do Pay.
 // Se o provider já tiver persistido a transação, retornamos true e marcamos PROCESSED.
 func quickConfirm(ctx context.Context, proc *processors.Client, prov processors.Provider, id uuid.UUID) bool {
-	httpc := &http.Client{Timeout: 400 * time.Millisecond} // folga moderada para evitar falso negativo
+	httpc := &http.Client{Timeout: confirmHTTPTimeout}
 	base := proc.DefaultBase()
 	if prov == processors.ProviderFallback {
 		base = proc.FallbackBase()
